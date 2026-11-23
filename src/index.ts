@@ -11,13 +11,16 @@ interface Task {
 import { createTask } from "./libs/task";
 import { fetchVisitorData } from "./libs/workflow";
 import { logger } from "./libs/logger";
+import { pushTokens } from "./libs/push";
 import Fastify from "fastify";
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import { cpus } from "node:os";
 import { formatError } from "./libs/utils";
 
 const REFRESH_INTERVAL = Number.parseInt(
-	process.env.REFRESH_INTERVAL || "30000",
+	process.env.REFRESH_INTERVAL ||
+		process.env.TOKEN_REFRESH_INTERVAL ||
+		"1800000",
 	10,
 );
 
@@ -133,7 +136,7 @@ const generateMultiThread = async (): Promise<TokenResult> => {
 						}
 					});
 
-					worker.on("exit", (code) => {
+					worker.on("exit", (_code) => {
 						completedWorkers++;
 
 						if (completedWorkers >= workerCount && !hasResolved) {
@@ -182,11 +185,14 @@ const getLatestTokens = async (forceUpdate = false): Promise<TokenResult> => {
 			logger.info("Refreshing expired tokens...");
 		}
 
-		updatePromise = generate();
+		updatePromise = (async () => {
+			const tokens = await generate();
+			await pushTokens(tokens);
+			return tokens;
+		})();
 
 		try {
-			await updatePromise;
-			return updatePromise;
+			return await updatePromise;
 		} finally {
 			updatePromise = null;
 		}
@@ -205,24 +211,36 @@ const startServer = async () => {
 		logger: false,
 	});
 
-	fastify.get("/update", async (request, reply) => {
+	fastify.get("/update", async (_request, _reply) => {
 		logger.info("Received force update request from /update endpoint");
-		await getLatestTokens(true);
+		const tokens = await getLatestTokens(true);
 
 		return {
 			status: "success",
 			code: 200,
-			message: "Tokens have been successfully updated",
-			instructions: "Please get the updated tokens from the /token endpoint",
+			message: "Tokens have been successfully updated and pushed",
+			tokens,
 		};
 	});
 
-	fastify.get("/token", async (request, reply) => {
+	fastify.get("/push", async (_request, _reply) => {
+		logger.info("Received push request from /push endpoint");
+		const tokens = await getLatestTokens();
+		const result = await pushTokens(tokens);
+
+		return {
+			status: result.success ? "success" : "failed",
+			...result,
+			tokens,
+		};
+	});
+
+	fastify.get("/token", async (_request, _reply) => {
 		const tokens = await getLatestTokens();
 		return tokens;
 	});
 
-	fastify.get("/", async (request, reply) => {
+	fastify.get("/", async (_request, reply) => {
 		reply.header("Content-Type", "text/html");
 		const refreshIntervalSeconds = REFRESH_INTERVAL / 1000;
 		const timeUntilNextUpdate = latestTokens
@@ -243,6 +261,7 @@ const startServer = async () => {
                 pre { background: #f0f0f0; padding: 15px; border-radius: 5px; overflow: auto; }
                 .button { display: inline-block; background: #c00; color: white; padding: 10px 15px; 
                           text-decoration: none; border-radius: 4px; margin: 10px 0; }
+                .button.secondary { background: #0066cc; }
                 .info { background: #eef; padding: 10px; border-radius: 5px; margin: 10px 0; }
                 .countdown { font-weight: bold; color: #c00; }
                 .status { font-weight: bold; }
@@ -265,8 +284,10 @@ const startServer = async () => {
 									latestTokens ? timeUntilNextUpdate : "?"
 								}</span> seconds</p>
                 <p>Refresh interval: ${refreshIntervalSeconds} seconds</p>
+                <p>Target endpoint: <code>${process.env.TARGET_ENDPOINT_URL || "None (automatic push disabled)"}</code></p>
               </div>
               <a href="/update" class="button">Force Update</a>
+              <a href="/push" class="button secondary">Push Tokens</a>
               <a href="/token" class="button">Get Tokens</a>
               <h2>Latest Tokens:</h2>
               <pre>${
@@ -292,7 +313,6 @@ const startServer = async () => {
                   
                   countdownElement.textContent = timeUntilNext;
                   
-                  
                   if (timeUntilNext === 0) {
                     setTimeout(() => {
                       window.location.reload();
@@ -300,10 +320,7 @@ const startServer = async () => {
                   }
                 }
                 
-                
                 setInterval(updateCountdown, 1000);
-                
-                
                 updateCountdown();
               </script>
             </body>
@@ -311,7 +328,7 @@ const startServer = async () => {
         `;
 	});
 
-	fastify.setNotFoundHandler((request, reply) => {
+	fastify.setNotFoundHandler((_request, reply) => {
 		reply.code(404).send({ error: "Not found" });
 	});
 
@@ -333,7 +350,6 @@ const startAutoUpdate = () => {
 		while (running) {
 			try {
 				await getLatestTokens();
-
 				await new Promise((resolve) => setTimeout(resolve, REFRESH_INTERVAL));
 			} catch (error) {
 				logger.error(
@@ -341,8 +357,7 @@ const startAutoUpdate = () => {
 						error instanceof Error ? error.message : String(error)
 					}`,
 				);
-
-				await new Promise((resolve) => setTimeout(resolve, 5 * 1000));
+				await new Promise((resolve) => setTimeout(resolve, 60 * 1000));
 			}
 		}
 	};
@@ -356,7 +371,7 @@ const startAutoUpdate = () => {
 
 if (!isMainThread && parentPort) {
 	let flagStop = false;
-	let visitorData: string | undefined = undefined;
+	let visitorData: string | undefined;
 	let stop: (() => void) | undefined;
 	const port = parentPort;
 
@@ -408,8 +423,14 @@ if (import.meta.main && isMainThread) {
 			logger.data("VISITOR DATA", result.visitorData);
 			logger.data("PO TOKEN", result.poToken);
 
+			if (process.env.TARGET_ENDPOINT_URL) {
+				logger.separator();
+				await pushTokens(result);
+			}
+
 			logger.separator();
 			logger.success("Done! Copy the tokens above.");
+			process.exit(0);
 		} else {
 			logger.banner();
 			logger.info("Starting YouTube Trusted Session Generator");
@@ -426,5 +447,5 @@ if (import.meta.main && isMainThread) {
 	}
 }
 
-export { generate, getLatestTokens, isOneshot };
+export { generate, getLatestTokens, isOneshot, pushTokens };
 export type { TokenResult, Task };

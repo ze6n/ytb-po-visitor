@@ -1,6 +1,6 @@
-# YouTube Trusted Session Generator
+# YouTube Trusted Session Generator (ytb-po-visitor)
 
-A lightweight Node.js/TypeScript library to generate YouTube trusted sessions without using a browser. This project provides similar functionality to YouTube "Proof of Origin Token" (poToken) generators but with a more efficient implementation that doesn't require a browser.
+A lightweight Node.js/TypeScript library to generate YouTube trusted sessions without using a browser, with automatic push support to DayNight / Lavalink endpoints. This project provides similar functionality to YouTube "Proof of Origin Token" (poToken) generators but with a more efficient implementation that doesn't require a browser.
 
 ## About
 
@@ -9,7 +9,7 @@ This project is a TypeScript/Bun rewrite inspired by:
 1. [YunzheZJU/youtube-po-token-generator](https://github.com/YunzheZJU/youtube-po-token-generator) - Original inspiration that generates a valid poToken with visitorData fetched from YouTube
 2. [iv-org/youtube-trusted-session-generator](https://github.com/iv-org/youtube-trusted-session-generator) - A Python-based YouTube session generator used by Invidious
 
-This implementation provides similar functionality but is rewritten from the ground up in TypeScript and optimized for Bun as the runtime environment.
+This fork adds automatic push support to forward generated tokens directly to target endpoints like DayNight and Lavalink v4 nodes.
 
 ## What is a poToken
 
@@ -20,13 +20,14 @@ These identity tokens (poToken and visitor_data) will make your YouTube session 
 ## Features
 
 - Generate YouTube visitor data and poToken
+- Automatic pushing to target endpoint (`TARGET_ENDPOINT_URL`)
 - No browser dependency
 - Lightweight and fast
 - Multi-threaded token generation
 - Easy to use
 - One-shot mode for direct token retrieval
 - API mode for programmatic access
-- Continuous token refreshing every 30 seconds
+- Continuous token refreshing (default: 30 minutes)
 - HTTP server with web interface and API endpoints
 - Automatic token management
 
@@ -39,21 +40,38 @@ These identity tokens (poToken and visitor_data) will make your YouTube session 
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/youtube-trusted-session-generator.git
-cd youtube-trusted-session-generator
+git clone https://github.com/ze6n/ytb-po-visitor.git
+cd ytb-po-visitor
 
 # Install dependencies
 bun install
 ```
 
+## Configuration
+
+Copy `.env.example` to `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Available environment variables:
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PORT` | HTTP server port | `3000` |
+| `REFRESH_INTERVAL` | Interval between refreshes in milliseconds | `1800000` (30 minutes) |
+| `TARGET_ENDPOINT_URL` | Target endpoint URL to post tokens to | unset (disabled) |
+| `TARGET_ENDPOINT_AUTH` | Optional `Authorization` header value | unset |
+
 ## Usage
 
-### Normal Mode (Continuous Updates)
+### Normal Mode (Continuous Updates & Auto-Push)
 
 In normal mode, the generator will:
-1. Start an HTTP server on port 3000 (configurable via PORT env variable)
-2. Generate tokens immediately
-3. Automatically refresh tokens every 30 seconds (configurable via REFRESH_INTERVAL env variable)
+1. Start an HTTP server on port 3000 (configurable via `PORT` env variable)
+2. Generate tokens immediately and push them to `TARGET_ENDPOINT_URL` if configured
+3. Automatically refresh tokens every 30 minutes (configurable via `REFRESH_INTERVAL` env variable) and push the updated tokens
 4. Provide a web interface and API endpoints
 
 ```bash
@@ -68,31 +86,34 @@ http://localhost:3000/
 ```
 
 The interface allows you to:
-- View current tokens
+- View current tokens and target endpoint status
 - Force update tokens with a single click
+- Push tokens directly to the target endpoint
 - See success and error messages
 
 #### API Endpoints
 
 - `GET /` - Web interface
 - `GET /token` - Get current tokens
-- `GET /update` - Force update tokens (returns success message)
+- `GET /update` - Force update tokens and push to target endpoint
+- `GET /push` - Push current tokens to target endpoint
 
 The `/update` endpoint will return a success message when tokens are updated:
 ```json
 {
   "status": "success",
   "code": 200,
-  "message": "Tokens have been successfully updated",
-  "instructions": "Please get the updated tokens from the /token endpoint"
+  "message": "Tokens have been successfully updated and pushed",
+  "tokens": {
+    "visitorData": "...",
+    "poToken": "..."
+  }
 }
 ```
 
-After receiving this success message, you should get the updated tokens from the `/token` endpoint.
-
 ### One-shot Mode
 
-Run the generator once and get tokens directly:
+Run the generator once, display tokens, and push to `TARGET_ENDPOINT_URL` if set:
 
 ```bash
 bun start --oneshot
@@ -107,58 +128,23 @@ This will output the tokens in JSON format:
 }
 ```
 
-## Response Format
+## Response & Push Format
 
-The generator returns an object with the following structure:
+The payload pushed to `TARGET_ENDPOINT_URL` (compatible with DayNight `POST /youtube`):
 
-```javascript
+```json
 {
-    visitorData: "string", // YouTube visitor data
-    poToken: "string"      // YouTube poToken
+  "poToken": "...",
+  "visitorData": "..."
 }
 ```
 
 ## Token Management
 
-- Tokens are automatically refreshed every 30 seconds in normal mode (configurable via REFRESH_INTERVAL env variable)
+- Tokens are automatically refreshed every 30 minutes in normal mode (configurable via `REFRESH_INTERVAL` env variable)
 - Tokens can be force-refreshed using the `/update` endpoint
-- The API provides a `forceUpdate` option to bypass caching
+- Tokens can be pushed immediately using the `/push` endpoint
 - Multi-threading is used for faster token generation
-
-## Error Handling
-
-The library includes built-in error handling and will throw errors for:
-- Network connection issues
-- Invalid responses from YouTube
-- Parsing errors
-
-## Using with Invidious
-
-You can use this library with Invidious by:
-
-1. Running the generator in either one-shot or normal mode
-2. Getting the poToken and visitorData values
-3. Adding these values to your Invidious config.yaml:
-   ```yaml
-   po_token: XXX
-   visitor_data: XXX
-   ```
-4. Restarting Invidious
-
-## Using with Other Applications
-
-You can also use this library with any other application that needs to communicate with YouTube's API:
-
-1. Run the generator in normal mode
-2. Use the API endpoint to fetch updated tokens when needed
-3. Include the tokens in your YouTube API requests
-
-
-## Credits
-
-- Original implementation: [YunzheZJU/youtube-po-token-generator](https://github.com/YunzheZJU/youtube-po-token-generator)
-- Inspiration: [iv-org/youtube-trusted-session-generator](https://github.com/iv-org/youtube-trusted-session-generator)
-
 
 ## License
 

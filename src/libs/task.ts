@@ -22,7 +22,7 @@ export const createTask = async (visitorData: string): Promise<Task> => {
 		join(import.meta.dirname, "inject.js"),
 		"utf-8",
 	);
-	let destroy: (() => void) | undefined = undefined;
+	let destroy: (() => void) | undefined;
 	let isIntentionalClose = false;
 
 	return {
